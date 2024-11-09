@@ -197,7 +197,9 @@ async def add_to_queue(interaction: discord.Interaction, spotify_url: str) -> No
 
 def fetch_music(song_name: str) -> str:
     # Search on YouTube
-    with yt_dlp.YoutubeDL({'format': 'bestaudio'}) as ydl:
+    with yt_dlp.YoutubeDL({'format': 'bestaudio',
+                           'username':'oauth',
+                           'password':''}) as ydl:
         info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
         url: str = info['entries'][0]['url']
         return url
