@@ -10,11 +10,11 @@ COPY requirements.txt /app/
 # Install dependencies from the requirements.txt file
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install ffmpeg
+RUN apt install ffmpeg
+
 # Copy the rest of your application files into the container
 COPY . /app/
-
-# Set environment variable to load .env from the mapped volume
-ENV ENV_PATH=/srv/.env
 
 
 # Set the entry point to run the bot
