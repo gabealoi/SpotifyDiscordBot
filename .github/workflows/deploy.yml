@@ -1,0 +1,90 @@
+name: Deploy to VPS
+
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Set up SSH to authenticate to the server
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.TG_DEPLOY_SSH_KEY }}
+
+      # Add known hosts for SSH
+      - name: Add known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AWS_TG_HOST_KEY }}" >> ~/.ssh/known_hosts
+
+      # Log in to Docker Hub (or GitHub Container Registry, or any container registry you're using)
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+
+      - name: Build application image
+        run: |
+          docker build -t "${{ secrets.DOCKER_USERNAME }}"/telegram_bot_app:latest -f Dockerfile .
+
+
+      - name: Build API image
+        run: |
+            docker build -t "${{ secrets.DOCKER_USERNAME }}"/api:latest -f Dockerfile.api .
+
+
+      - name: Push application image
+        run: |
+          docker push "${{ secrets.DOCKER_USERNAME }}"/telegram_bot_app:latest
+          
+      - name: Push API image
+        run: |
+          docker push "${{ secrets.DOCKER_USERNAME }}"/api:latest
+
+
+      # SSH into VPS and pull the latest Docker image, stop old container, and start the new one
+      - name: Deploy container to AWS
+        run: |
+          ssh ubuntu@${{ secrets.AWS_TG_SERVER }} << 'EOF'
+      
+            docker container prune -f
+            docker image prune -af
+            docker volume prune -f
+      
+            docker pull "${{ secrets.DOCKER_USERNAME }}"/telegram_bot_app:latest
+            docker pull "${{ secrets.DOCKER_USERNAME }}"/api:latest
+
+            docker stop telegram_bot_container || true
+            docker rm telegram_bot_container || true
+
+
+            docker run -d \
+              --name telegram_bot_container \
+              -v /var/log/tgram_bot_logging:/var/log/tgram_bot_logging \
+              -v /home/ubuntu/config/.env:/srv/telegram_service/app/config/.env \
+              -v /home/ubuntu/config/.aws:/root/.aws \
+              --restart unless-stopped \
+              "${{ secrets.DOCKER_USERNAME }}"/telegram_bot_app:latest
+
+
+            docker stop api_container || true
+            docker rm api_container || true
+
+            docker run -d \
+              --name api_container \
+              -v /var/log/api_logging:/var/log/api_logging \
+              -v /home/ubuntu/config/.env:/srv/telegram_service_api/api/config/.env \
+              -v /home/ubuntu/config/.aws:/root/.aws \
+              -p 5952:5952 \
+              --restart unless-stopped \
+              "${{ secrets.DOCKER_USERNAME }}"/api:latest
+          EOF
