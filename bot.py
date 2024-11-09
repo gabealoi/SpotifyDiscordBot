@@ -1,0 +1,182 @@
+import os
+import asyncio
+import discord
+import yt_dlp
+import spotipy
+from discord.ext import commands
+from discord import app_commands
+from spotipy.oauth2 import SpotifyClientCredentials
+from queue import Queue
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+
+# ffmpeg setup
+FFMPEG_PATH = os.getenv('ffmpeg_path')
+SPOTIFY_ID = os.getenv('spotify_id')
+SPOTIFY_SECRET = os.getenv('spotify_secret')
+DISCORD_TOKEN = os.getenv('discord_token')
+
+
+
+# Initialize the bot with a command prefix
+intents = discord.Intents.default()
+intents.message_content = True # enable the intent for reading message content (required for text commands)
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Spotify API setup
+sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_ID,
+                                                           client_secret=SPOTIFY_SECRET))
+
+
+# Initialize global variables
+music_queue: Queue[str] = Queue()
+is_playing: bool = False
+current_song: str = ""
+voice_client: discord.VoiceClient = None
+
+
+
+
+'''
+    Event handler for the when the bot spins up, and some associated commands that manage the bot's joined channel-state
+'''
+@bot.event
+async def on_ready() -> None:
+    await bot.tree.sync()
+    print(f'{bot.user.name} has connected to Discord!')
+
+@bot.tree.command(name="join")
+async def join(interaction: discord.Interaction) -> None:
+    global voice_client
+    if interaction.user.voice:
+        channel = interaction.user.voice.channel
+        voice_client = await channel.connect()
+        await interaction.response.send_message(f"Joined {channel.name}!")
+    else:
+        await interaction.response.send_message("You need to join a voice channel first!")
+
+@bot.tree.command(name="leave")
+async def leave(interaction: discord.Interaction) -> None:
+    global voice_client
+    if voice_client:
+        await voice_client.disconnect()
+        voice_client = None
+        await interaction.response.send_message("Disconnected from the voice channel.")
+    else:
+        await interaction.response.send_message("I'm not currently connected to any voice channel.")
+
+
+
+
+'''
+    Command to play music from a YouTube URL. It will add the song to the queue if not already playing,
+    or if it is, it will play the next song in the queue if available.
+'''
+@bot.tree.command(name="play")
+async def play(interaction: discord.Interaction) -> None:
+# async def play(interaction: discord.Interaction, url: str = None) -> None:
+    global is_playing, current_song, voice_client
+
+    if voice_client is None:
+        await interaction.response.send_message("I need to join a voice channel first! Use `/join` to make me join.")
+        return
+
+    def play_next(_) -> None:
+        global is_playing, current_song
+        if not music_queue.empty():
+            is_playing = True
+            current_song = music_queue.get()  # Dequeue the next song
+            voice_client.play(discord.FFmpegPCMAudio(current_song, executable=FFMPEG_PATH, options='-vn'), after=play_next)
+        else:
+            # await interaction.response.send_message(f"No more songs in the queue. Enjoy your music!")
+            is_playing = False
+
+    if not is_playing and not music_queue.empty():
+        play_next(None)  # Starts playing the next song
+    elif not is_playing and music_queue.empty(): 
+        await interaction.response.send_message("The queue is empty. Add some songs to start playing!")
+        return
+    else:
+        await interaction.response.send_message("Music is already playing!")
+        # await interaction.response.send_message(f"{interaction.user} added some groovy tunes to the queue.")
+        # music_queue.put(url)  # Enqueue the song if already playing
+
+
+@bot.tree.command(name="clear_queue")
+async def clear_queue(interaction: discord.Interaction) -> None:
+    global music_queue
+    music_queue.queue.clear()
+    await interaction.response.send_message("Cleared the music queue!")
+
+
+
+
+
+'''
+    Simple voice_client commands to control pause, resume, and skip features
+'''
+@bot.tree.command(name="pause")
+async def pause(ctx: commands.Context) -> None:
+    global voice_client
+    if voice_client.is_playing():
+        voice_client.pause()
+
+@bot.tree.command(name="resume")
+async def resume(ctx: commands.Context) -> None:
+    global voice_client
+    if voice_client.is_paused():
+        voice_client.resume()
+
+@bot.tree.command(name="skip")
+async def skip(ctx: commands.Context) -> None:
+    global voice_client
+    if voice_client.is_playing():
+        voice_client.stop()  # This will trigger `play_next` to start the next song
+
+
+
+
+
+'''
+    Spotify Integration to lend the ability to play songs based off a spotify link
+'''
+@bot.tree.command(name="add")
+async def add_to_queue(interaction: discord.Interaction, spotify_url: str) -> None:
+    global music_queue
+
+    # acknowledge the interaction and defer it
+    await interaction.response.send_message("Looking for your song brah, one sec...")
+    # await interaction.response.defer()
+
+    # Get song details from Spotify
+    try:
+        track_id: str = spotify_url.split("track/")[1].split("?")[0]
+        track = sp.track(track_id)
+        song_name: str = track['name'] + " " + track['artists'][0]['name']
+        
+
+        # def search_youtube():
+        # Search on YouTube
+        with yt_dlp.YoutubeDL({'format': 'bestaudio'}) as ydl:
+            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
+            url: str = info['entries'][0]['url']
+            # return url
+        
+        # # get the url in a non-blocking way
+        # song_url = search_youtube()
+
+        # Add to the queue
+        music_queue.put(url)  # Enqueue the song
+        await interaction.followup.send(f"Added [{song_name}]({spotify_url}) to the queue!")
+    except Exception as e:
+        await interaction.followup.send("Error adding the song. Make sure the link is a valid Spotify track URL.")
+
+
+
+
+bot.run(token=DISCORD_TOKEN)
+
