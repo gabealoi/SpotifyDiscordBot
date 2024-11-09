@@ -1,12 +1,15 @@
 import os
 import asyncio
+import random
 import discord
 import yt_dlp
 import spotipy
+import logging
 from discord.ext import commands
-from discord import app_commands
+from discord import User
 from spotipy.oauth2 import SpotifyClientCredentials
 from queue import Queue
+from typing import Dict
 
 from dotenv import load_dotenv
 
@@ -33,9 +36,11 @@ sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_ID,
 
 
 # Initialize global variables
-music_queue: Queue[str] = Queue()
+music_queue: Queue[Dict] = Queue(maxsize=100)
 is_playing: bool = False
 current_song: str = ""
+current_song_name: str = ""
+current_song_provider: User = None
 voice_client: discord.VoiceClient = None
 
 
@@ -79,17 +84,23 @@ async def leave(interaction: discord.Interaction) -> None:
 @bot.tree.command(name="play")
 async def play(interaction: discord.Interaction) -> None:
 # async def play(interaction: discord.Interaction, url: str = None) -> None:
-    global is_playing, current_song, voice_client
+    global is_playing, current_song, current_song_name, voice_client
+
+    await interaction.response.defer()
 
     if voice_client is None:
-        await interaction.response.send_message("I need to join a voice channel first! Use `/join` to make me join.")
+        await interaction.followup.send("I need to join a voice channel first! Use `/join` to make me join.")
+        # await interaction.response.send_message("I need to join a voice channel first! Use `/join` to make me join.")
         return
 
     def play_next(_) -> None:
-        global is_playing, current_song
+        global is_playing, current_song, current_song_name, current_song_provider
         if not music_queue.empty():
             is_playing = True
-            current_song = music_queue.get()  # Dequeue the next song
+            current_song_data = music_queue.get() # Dequeue the next song
+            current_song_provider = current_song_data.pop("provider", 'Unknown')
+            current_song_name = list(current_song_data.keys())[0]
+            current_song = current_song_data[current_song_name]
             voice_client.play(discord.FFmpegPCMAudio(current_song, executable=FFMPEG_PATH, options='-vn'), after=play_next)
         else:
             # await interaction.response.send_message(f"No more songs in the queue. Enjoy your music!")
@@ -97,11 +108,12 @@ async def play(interaction: discord.Interaction) -> None:
 
     if not is_playing and not music_queue.empty():
         play_next(None)  # Starts playing the next song
+        await interaction.followup.send("Now playing: " + '**' + current_song_name + '**')
     elif not is_playing and music_queue.empty(): 
-        await interaction.response.send_message("The queue is empty. Add some songs to start playing!")
+        await interaction.followup.send("The queue is empty. Add some songs to start playing!")
         return
     else:
-        await interaction.response.send_message("Music is already playing!")
+        await interaction.followup.send("Music is already playing!")
         # await interaction.response.send_message(f"{interaction.user} added some groovy tunes to the queue.")
         # music_queue.put(url)  # Enqueue the song if already playing
 
@@ -120,20 +132,32 @@ async def clear_queue(interaction: discord.Interaction) -> None:
     Simple voice_client commands to control pause, resume, and skip features
 '''
 @bot.tree.command(name="pause")
-async def pause(ctx: commands.Context) -> None:
+async def pause(interaction: discord.Interaction) -> None:
     global voice_client
+
+    pauser = interaction.user
+    pause_response = random.choice([f"{pauser.mention} is consciously stopping the vibes, probably to beat his meat.", f"Everybody 'boo' {pauser.mention}, who tf pauses the queue like that?"])
+    await interaction.response.send_message(pause_response)
+
     if voice_client.is_playing():
         voice_client.pause()
 
 @bot.tree.command(name="resume")
-async def resume(ctx: commands.Context) -> None:
+async def resume(interaction: discord.Interaction) -> None:
     global voice_client
+
     if voice_client.is_paused():
         voice_client.resume()
 
 @bot.tree.command(name="skip")
-async def skip(ctx: commands.Context) -> None:
+async def skip(interaction: discord.Interaction) -> None:
     global voice_client
+
+    skipper = interaction.user
+    skip_response = random.choice([f"{skipper.mention} is being a bitch and is skipping {current_song_provider.mention}", f"{current_song_provider.mention} stop playing fucking trash, {skipper.mention} is skipping that shit."])
+    if not skipper.__eq__(current_song_provider):
+        await interaction.response.send_message(skip_response)
+
     if voice_client.is_playing():
         voice_client.stop()  # This will trigger `play_next` to start the next song
 
@@ -156,27 +180,31 @@ async def add_to_queue(interaction: discord.Interaction, spotify_url: str) -> No
     try:
         track_id: str = spotify_url.split("track/")[1].split("?")[0]
         track = sp.track(track_id)
-        song_name: str = track['name'] + " " + track['artists'][0]['name']
+        song_name = track['name']
+        song_artists = track['artists'][0]['name']
+        song_name_track: str = song_name + " " + song_artists
         
-
-        # def search_youtube():
-        # Search on YouTube
-        with yt_dlp.YoutubeDL({'format': 'bestaudio'}) as ydl:
-            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
-            url: str = info['entries'][0]['url']
-            # return url
-        
-        # # get the url in a non-blocking way
-        # song_url = search_youtube()
+        loop = asyncio.get_event_loop()
+        url = await loop.run_in_executor(None, lambda: fetch_music(song_name=song_name_track))
 
         # Add to the queue
-        music_queue.put(url)  # Enqueue the song
-        await interaction.followup.send(f"Added [{song_name}]({spotify_url}) to the queue!")
+        music_queue.put({song_name:url,"provider":interaction.user})  # Enqueue the song
+        await interaction.followup.send(f"{interaction.user.mention} added [{song_name}]({spotify_url}) by {song_artists} to the queue!")
     except Exception as e:
         await interaction.followup.send("Error adding the song. Make sure the link is a valid Spotify track URL.")
 
 
 
+def fetch_music(song_name: str) -> str:
+    # Search on YouTube
+    with yt_dlp.YoutubeDL({'format': 'bestaudio'}) as ydl:
+        info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
+        url: str = info['entries'][0]['url']
+        return url
+
+
+
 
 bot.run(token=DISCORD_TOKEN)
+# bot.run(token=DISCORD_TOKEN, log_level=logging.DEBUG)
 
