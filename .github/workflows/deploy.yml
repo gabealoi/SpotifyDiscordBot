@@ -43,7 +43,7 @@ jobs:
           
 
       # SSH into VPS and pull the latest Docker image, stop old container, and start the new one
-      - name: Deploy container to AWS
+      - name: Deploy container to VPS
         run: |
           ssh root@${{ secrets.VPS_SERVER }} << 'EOF'
       
