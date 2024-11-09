@@ -1,0 +1,66 @@
+name: Deploy to VPS
+
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Set up SSH to authenticate to the server
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      # Add known hosts for SSH
+      - name: Add known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+
+      # Log in to Docker Hub (or GitHub Container Registry, or any container registry you're using)
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+
+      - name: Build application image
+        run: |
+          docker build -t "${{ secrets.DOCKER_USER }}"/discord_spotify_app:latest -f Dockerfile .
+
+
+      - name: Push application image
+        run: |
+          docker push "${{ secrets.DOCKER_USER }}"/discord_spotify_app:latest
+          
+
+      # SSH into VPS and pull the latest Docker image, stop old container, and start the new one
+      - name: Deploy container to VPS
+        run: |
+          ssh root@${{ secrets.VPS_SERVER }} << 'EOF'
+      
+            docker container prune -f
+            docker image prune -af
+            docker volume prune -f
+      
+            docker pull "${{ secrets.DOCKER_USER }}"/discord_spotify_app:latest
+
+            docker stop discord_spotify_container || true
+            docker rm discord_spotify_container || true
+
+
+            docker run -d \
+              --name discord_spotify_container \
+              -v /srv/.env:/app/.env \
+              --restart unless-stopped \
+              "${{ secrets.DOCKER_USER }}"/discord_spotify_app:latest
+
+          EOF
