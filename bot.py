@@ -108,6 +108,8 @@ async def play(interaction: discord.Interaction) -> None:
                 not_found = True
                 return
             voice_client.play(discord.FFmpegPCMAudio(current_song, executable=FFMPEG_PATH, options='-vn'), after=play_next)
+
+            asyncio.create_task(update_chat_on_next_song(interaction=interaction, song_name=current_song_name, song_artist=current_song_artists, url=current_song_data[current_song_name]))
         else:
             # await interaction.response.send_message(f"No more songs in the queue. Enjoy your music!")
             is_playing = False
@@ -124,6 +126,11 @@ async def play(interaction: discord.Interaction) -> None:
         await interaction.followup.send("Music is already playing!")
         # await interaction.response.send_message(f"{interaction.user} added some groovy tunes to the queue.")
         # music_queue.put(url)  # Enqueue the song if already playing
+
+
+async def update_chat_on_next_song(interaction: discord.Interaction, song_name: str, song_artist: str, url:str):
+    await interaction.response.send_message(f"!! [{song_name}]({url}) by {song_artist} is now playing !!")
+
 
 
 @bot.tree.command(name="clear_queue")
