@@ -94,13 +94,19 @@ async def play(interaction: discord.Interaction) -> None:
         return
 
     def play_next(_) -> None:
-        global is_playing, current_song, current_song_name, current_song_provider
+        global is_playing, current_song, current_song_name, current_song_provider, not_found
         if not music_queue.empty():
+            not_found = False  # Reset the flag for song not found error
             is_playing = True
             current_song_data = music_queue.get() # Dequeue the next song
+            current_song_artists = current_song_data.pop("artists", "")
             current_song_provider = current_song_data.pop("provider", 'Unknown')
             current_song_name = list(current_song_data.keys())[0]
-            current_song = current_song_data[current_song_name]
+            current_song = fetch_music(current_song_name + " " + current_song_artists)
+
+            if current_song == None:
+                not_found = True
+                return
             voice_client.play(discord.FFmpegPCMAudio(current_song, executable=FFMPEG_PATH, options='-vn'), after=play_next)
         else:
             # await interaction.response.send_message(f"No more songs in the queue. Enjoy your music!")
@@ -112,6 +118,8 @@ async def play(interaction: discord.Interaction) -> None:
     elif not is_playing and music_queue.empty(): 
         await interaction.followup.send("The queue is empty. Add some songs to start playing!")
         return
+    elif not_found:
+        await interaction.followup.send("I couldn't find that song. Please check the spelling and try again.")
     else:
         await interaction.followup.send("Music is already playing!")
         # await interaction.response.send_message(f"{interaction.user} added some groovy tunes to the queue.")
@@ -184,24 +192,30 @@ async def add_to_queue(interaction: discord.Interaction, spotify_url: str) -> No
         song_artists = track['artists'][0]['name']
         song_name_track: str = song_name + " " + song_artists
         
-        loop = asyncio.get_event_loop()
-        url = await loop.run_in_executor(None, lambda: fetch_music(song_name=song_name_track))
+        # loop = asyncio.get_event_loop()
+        # url = await loop.run_in_executor(None, lambda: fetch_music(song_name=song_name_track))
 
         # Add to the queue
-        music_queue.put({song_name:url,"provider":interaction.user})  # Enqueue the song
+        music_queue.put({song_name:spotify_url,"artists": song_artists, "provider":interaction.user})  # Enqueue the song
+        # music_queue.put({song_name:url,"provider":interaction.user})  # Enqueue the song
         await interaction.followup.send(f"{interaction.user.mention} added [{song_name}]({spotify_url}) by {song_artists} to the queue!")
     except Exception as e:
         await interaction.followup.send("Error adding the song. Make sure the link is a valid Spotify track URL.")
 
 
 
-def fetch_music(song_name: str) -> str:
+def fetch_music(song_name: str) -> str | None:
     # Search on YouTube
     with yt_dlp.YoutubeDL({'format': 'bestaudio',
                            'username':'oauth',
-                           'password':''}) as ydl:
+                           'password':'',
+                           'socket_timeout':15}) as ydl:
         info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
-        url: str = info['entries'][0]['url']
+
+        try:
+            url: str = info['entries'][0]['url']
+        except IndexError:
+            return None
         return url
 
 
