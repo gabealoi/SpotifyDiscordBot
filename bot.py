@@ -109,7 +109,14 @@ async def play(interaction: discord.Interaction) -> None:
                 return
             voice_client.play(discord.FFmpegPCMAudio(current_song, executable=FFMPEG_PATH, options='-vn'), after=play_next)
 
-            asyncio.create_task(update_chat_on_next_song(interaction=interaction, song_name=current_song_name, song_artist=current_song_artists, url=current_song_data[current_song_name]))
+            # Create a new task to update the chat with the next song info, if the bot is running in an event loop
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                asyncio.create_task(update_chat_on_next_song(interaction=interaction, song_name=current_song_name, song_artist=current_song_artists, url=current_song_data[current_song_name]))
+            else:
+                # Use the existing loop to run the task
+                loop.run_until_complete(update_chat_on_next_song(interaction=interaction, song_name=current_song_name, song_artist=current_song_artists, url=current_song_data[current_song_name]))
+            # asyncio.create_task(update_chat_on_next_song(interaction=interaction, song_name=current_song_name, song_artist=current_song_artists, url=current_song_data[current_song_name]))
         else:
             # await interaction.response.send_message(f"No more songs in the queue. Enjoy your music!")
             is_playing = False
