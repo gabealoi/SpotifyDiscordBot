@@ -136,7 +136,7 @@ async def play(interaction: discord.Interaction) -> None:
 
 
 async def update_chat_on_next_song(interaction: discord.Interaction, song_name: str, song_artist: str, url:str):
-    await interaction.response.send_message(f"!! [{song_name}]({url}) by {song_artist} is now playing !!")
+    await interaction.followup.send(f"!! [{song_name}]({url}) by {song_artist} is now playing !!")
 
 
 
